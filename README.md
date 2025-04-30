@@ -97,6 +97,7 @@ Follow these steps to set up and run the generator locally.
 5.  **Run the Generator**
 
     > **Note:** The tutorial generation process is comprehensive and involves multiple LLM calls. For large codebases (e.g., >100 files or several MBs of code), generation can take a significant amount of time, potentially **2-3 hours or more**, depending on the codebase size, LLM API speeds, and rate limits. Please be patient!
+If you're hitting rate limits on free tier, try "Gemini 2.5 Pro Preview 03-25" or some other model
 
     *   **For a Local Directory:**
         ```bash
