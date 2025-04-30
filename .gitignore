@@ -1,0 +1,45 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Output directory
+output-directory/
+
+# Log files
+logs/
+*.log
+
+# Cache files
+embedding_cache.json
+
+
+# Virtual environment
+venv/
+.venv/
+env/
+.env/
+venv.bak/
+.envrc
+
+# Environment variables file
+.env
+
+# Distribution / packaging
+*.egg-info/
+.eggs/
+dist/
+build/
+wheels/
+*.egg
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Editor directories and files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace 
