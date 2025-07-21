@@ -1,0 +1,75 @@
+version: '3.8'
+
+services:
+  # GitSnip React Frontend
+  frontend:
+    build:
+      context: ./frontend/react-app
+      dockerfile: Dockerfile
+    container_name: gitsnip-frontend
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - NODE_ENV=production
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - gitsnip-network
+
+  # GitSnip Python Backend (placeholder for future integration)
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: gitsnip-backend
+    ports:
+      - "5000:5000"
+    environment:
+      - FLASK_ENV=production
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-your_gemini_api_key_here}
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-your_github_token_here}
+    volumes:
+      - ./data:/app/data
+      - ./output:/app/output
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - gitsnip-network
+    profiles:
+      - backend  # Only start when explicitly requested
+
+  # Reverse Proxy (for production deployment)
+  nginx-proxy:
+    image: nginx:alpine
+    container_name: gitsnip-proxy
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx-proxy.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - frontend
+    restart: unless-stopped
+    networks:
+      - gitsnip-network
+    profiles:
+      - proxy  # Only start when explicitly requested
+
+networks:
+  gitsnip-network:
+    driver: bridge
+
+volumes:
+  gitsnip-data:
+    driver: local
+

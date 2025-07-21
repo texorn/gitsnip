@@ -108,85 +108,156 @@ function App() {
     setProgress(0)
     setAnalysisMessage('Starting analysis...')
 
-    // Simulate analysis progress
-    const simulateProgress = () => {
-      let currentProgress = 0
-      const interval = setInterval(() => {
-        currentProgress += Math.random() * 15
-        if (currentProgress >= 100) {
-          currentProgress = 100
-          setProgress(100)
-          setAnalysisMessage('Analysis complete!')
-          setIsAnalyzing(false)
-          setResults(`# GitSnap Analysis Results
-
-## Repository: ${repoUrl}
-
-### Project Structure
-- **Language**: Python
-- **Files Analyzed**: 42 files
-- **Total Lines of Code**: 3,247
-
-### Key Components
-1. **Main Application** (\`main.py\`)
-   - Entry point for the application
-   - Handles command-line arguments and configuration
-
-2. **Flow Module** (\`flow/\`)
-   - Contains the core analysis logic
-   - Implements the codebase traversal algorithms
-
-3. **Nodes Module** (\`nodes/\`)
-   - Defines the abstract syntax tree nodes
-   - Handles code parsing and representation
-
-### Architecture Overview
-The GitSnap tool follows a modular architecture with clear separation of concerns:
-
-\`\`\`
-GitSnap/
-├── main.py          # Entry point
-├── flow/            # Analysis engine
-│   ├── analyzer.py  # Core analysis logic
-│   └── traverser.py # Code traversal
-├── nodes/           # AST representation
-│   ├── base.py      # Base node classes
-│   └── python.py    # Python-specific nodes
-└── requirements.txt # Dependencies
-\`\`\`
-
-### Dependencies
-- click: Command-line interface
-- ast: Python AST parsing
-- pathlib: File system operations
-- typing: Type annotations
-
-### Usage Patterns
-The tool is designed to be used as a command-line utility that analyzes Python codebases and generates comprehensive documentation with interactive diagrams.
-
-### Recommendations
-1. Consider adding support for more programming languages
-2. Implement caching for large repositories
-3. Add configuration file support for complex analysis scenarios`)
-          setCurrentStep(5)
-          clearInterval(interval)
-        } else {
-          setProgress(currentProgress)
-          if (currentProgress < 30) {
-            setAnalysisMessage('Cloning repository...')
-          } else if (currentProgress < 60) {
-            setAnalysisMessage('Analyzing code structure...')
-          } else if (currentProgress < 90) {
-            setAnalysisMessage('Generating documentation...')
-          } else {
-            setAnalysisMessage('Finalizing results...')
-          }
+    try {
+      // Prepare analysis request
+      const analysisData = {
+        repository_url: repoUrl,
+        config: {
+          include_patterns: includePatterns,
+          exclude_patterns: excludePatterns,
+          max_file_size: maxFileSize,
+          language: language,
+          is_private: isPrivateRepo,
+          github_token: isPrivateRepo ? githubToken : undefined
         }
-      }, 500)
+      }
+
+      // Start analysis
+      setAnalysisMessage('Submitting analysis request...')
+      const startResponse = await fetch('/api/gitsnip/analyze', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(analysisData)
+      })
+
+      if (!startResponse.ok) {
+        const errorData = await startResponse.json()
+        throw new Error(errorData.error || 'Failed to start analysis')
+      }
+
+      const { job_id } = await startResponse.json()
+      setJobId(job_id)
+      setProgress(5)
+      setAnalysisMessage('Analysis started, monitoring progress...')
+
+      // Poll for progress
+      const pollProgress = async () => {
+        try {
+          const statusResponse = await fetch(`/api/gitsnip/status/${job_id}`)
+          
+          if (!statusResponse.ok) {
+            throw new Error('Failed to get analysis status')
+          }
+
+          const statusData = await statusResponse.json()
+          setProgress(statusData.progress)
+          setAnalysisMessage(statusData.message)
+
+          if (statusData.status === 'completed') {
+            // Get results
+            const resultsResponse = await fetch(`/api/gitsnip/results/${job_id}`)
+            
+            if (resultsResponse.ok) {
+              const resultsData = await resultsResponse.json()
+              setResults(formatAnalysisResults(resultsData))
+              setCurrentStep(5)
+            } else {
+              throw new Error('Failed to get analysis results')
+            }
+            
+            setIsAnalyzing(false)
+          } else if (statusData.status === 'failed') {
+            throw new Error(statusData.message || 'Analysis failed')
+          } else {
+            // Continue polling
+            setTimeout(pollProgress, 2000)
+          }
+        } catch (error) {
+          console.error('Error polling progress:', error)
+          setAnalysisMessage(`Error: ${error.message}`)
+          setIsAnalyzing(false)
+        }
+      }
+
+      // Start polling
+      setTimeout(pollProgress, 1000)
+
+    } catch (error) {
+      console.error('Analysis error:', error)
+      setAnalysisMessage(`Error: ${error.message}`)
+      setIsAnalyzing(false)
+    }
+  }
+
+  const formatAnalysisResults = (resultsData) => {
+    const { results, repository_url } = resultsData
+    
+    if (!results) {
+      return `# GitSnip Analysis Results\n\n## Repository: ${repository_url}\n\nAnalysis completed but no detailed results available.`
     }
 
-    // Start simulation after a short delay
-    setTimeout(simulateProgress, 1000)
+    const summary = results.analysis_summary || {}
+    
+    return `# GitSnip Analysis Results
+
+## Repository: ${repository_url}
+
+### Project Structure
+- **Project Name**: ${summary.project_name || 'Unknown'}
+- **Files Analyzed**: ${summary.total_files || 'Unknown'} files
+- **Generated Documentation**: ${summary.generated_files || 0} files
+- **Analysis Date**: ${new Date(summary.analysis_date || Date.now()).toLocaleDateString()}
+
+### Generated Documentation
+${results.files && results.files.length > 0 ? 
+  results.files.map(file => `- ${file}`).join('\n') : 
+  'No documentation files generated'
+}
+
+### Analysis Summary
+${summary.readme || 'Detailed analysis documentation has been generated and is available for download.'}
+
+### Download Results
+The complete analysis results including all generated documentation, diagrams, and tutorials are available for download.
+
+### Next Steps
+1. Download the complete analysis package
+2. Review the generated documentation
+3. Explore the project structure and relationships
+4. Use the tutorials to understand the codebase
+
+The analysis provides comprehensive insights into the codebase structure, key components, and their relationships to help you quickly understand and navigate the project.`
+  }
+
+  const downloadResults = async () => {
+    if (!jobId) {
+      alert('No analysis results available for download')
+      return
+    }
+
+    try {
+      const response = await fetch(`/api/gitsnip/download/${jobId}`)
+      
+      if (!response.ok) {
+        throw new Error('Failed to download results')
+      }
+
+      // Create download link
+      const blob = await response.blob()
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `gitsnip_analysis_${jobId}.zip`
+      document.body.appendChild(a)
+      a.click()
+      window.URL.revokeObjectURL(url)
+      document.body.removeChild(a)
+    } catch (error) {
+      console.error('Download error:', error)
+      alert(`Download failed: ${error.message}`)
+    }
   }
 
   const goToStep = (step) => {
@@ -579,7 +650,7 @@ The tool is designed to be used as a command-line utility that analyzes Python c
                 <FileText className="w-5 h-5" />
                 <span>Analysis Results</span>
               </CardTitle>
-              <Button variant="outline" size="sm">
+              <Button variant="outline" size="sm" onClick={downloadResults} disabled={!jobId}>
                 <Download className="w-4 h-4 mr-2" />
                 Download
               </Button>
