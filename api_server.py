@@ -15,9 +15,14 @@ import shutil
 import tempfile
 import json
 import glob
+import base64
+import hashlib
 from datetime import datetime
 from pathlib import Path
 import logging
+from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -38,6 +43,92 @@ os.makedirs(DATA_DIR, exist_ok=True)
 
 # Store job status in memory (in production, use Redis or database)
 jobs = {}
+
+def generate_encryption_key(github_token, salt=None):
+    """Generate encryption key from GitHub token"""
+    if salt is None:
+        salt = b'gitsnip_salt_2024'  # Use a consistent salt for the same token
+    
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        iterations=100000,
+    )
+    key = base64.urlsafe_b64encode(kdf.derive(github_token.encode()))
+    return key
+
+def encrypt_data(data, github_token):
+    """Encrypt data using GitHub token as key"""
+    try:
+        key = generate_encryption_key(github_token)
+        fernet = Fernet(key)
+        
+        if isinstance(data, str):
+            data = data.encode()
+        elif isinstance(data, dict):
+            data = json.dumps(data).encode()
+        
+        encrypted_data = fernet.encrypt(data)
+        return base64.urlsafe_b64encode(encrypted_data).decode()
+    except Exception as e:
+        logger.error(f"Encryption error: {str(e)}")
+        raise
+
+def decrypt_data(encrypted_data, github_token):
+    """Decrypt data using GitHub token as key"""
+    try:
+        key = generate_encryption_key(github_token)
+        fernet = Fernet(key)
+        
+        encrypted_bytes = base64.urlsafe_b64decode(encrypted_data.encode())
+        decrypted_data = fernet.decrypt(encrypted_bytes)
+        
+        return decrypted_data.decode()
+    except Exception as e:
+        logger.error(f"Decryption error: {str(e)}")
+        raise
+
+def encrypt_file(file_path, github_token):
+    """Encrypt a file and return encrypted content"""
+    try:
+        with open(file_path, 'rb') as f:
+            file_content = f.read()
+        
+        key = generate_encryption_key(github_token)
+        fernet = Fernet(key)
+        encrypted_content = fernet.encrypt(file_content)
+        
+        return base64.urlsafe_b64encode(encrypted_content).decode()
+    except Exception as e:
+        logger.error(f"File encryption error: {str(e)}")
+        raise
+
+def create_encrypted_archive(directory_path, github_token):
+    """Create an encrypted ZIP archive of a directory"""
+    try:
+        # Create temporary ZIP file
+        temp_zip = tempfile.NamedTemporaryFile(suffix='.zip', delete=False)
+        temp_zip.close()
+        
+        # Create ZIP archive
+        shutil.make_archive(temp_zip.name.replace('.zip', ''), 'zip', directory_path)
+        
+        # Read and encrypt the ZIP file
+        with open(temp_zip.name, 'rb') as f:
+            zip_content = f.read()
+        
+        key = generate_encryption_key(github_token)
+        fernet = Fernet(key)
+        encrypted_zip = fernet.encrypt(zip_content)
+        
+        # Clean up temp file
+        os.unlink(temp_zip.name)
+        
+        return base64.urlsafe_b64encode(encrypted_zip).decode()
+    except Exception as e:
+        logger.error(f"Archive encryption error: {str(e)}")
+        raise
 
 @app.route('/health', methods=['GET'])
 def health_check():
@@ -120,16 +211,78 @@ def get_results(job_id):
     if job['status'] != 'completed':
         return jsonify({'error': 'Analysis not completed yet'}), 400
     
-    return jsonify({
-        'job_id': job_id,
-        'status': job['status'],
-        'repository_url': job['repository_url'],
-        'results': job['results'],
-        'completed_at': job.get('completed_at'),
-        'download_url': f'/api/gitsnip/download/{job_id}'
-    })
+    # Check if this is a private repository
+    is_private = job.get('config', {}).get('is_private', False)
+    
+    if is_private:
+        # For private repos, return encrypted results
+        return jsonify({
+            'job_id': job_id,
+            'status': job['status'],
+            'repository_url': job['repository_url'],
+            'is_private': True,
+            'encrypted_results': job.get('encrypted_results'),
+            'completed_at': job.get('completed_at'),
+            'download_url': f'/api/gitsnip/download/{job_id}'
+        })
+    else:
+        # For public repos, return results normally
+        return jsonify({
+            'job_id': job_id,
+            'status': job['status'],
+            'repository_url': job['repository_url'],
+            'is_private': False,
+            'results': job['results'],
+            'completed_at': job.get('completed_at'),
+            'download_url': f'/api/gitsnip/download/{job_id}'
+        })
 
-@app.route('/api/gitsnip/download/<job_id>', methods=['GET'])
+@app.route('/api/gitsnip/decrypt/<job_id>', methods=['POST'])
+def decrypt_results(job_id):
+    """Decrypt results for private repositories"""
+    if job_id not in jobs:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    job = jobs[job_id]
+    if job['status'] != 'completed':
+        return jsonify({'error': 'Analysis not completed yet'}), 400
+    
+    if not job.get('config', {}).get('is_private', False):
+        return jsonify({'error': 'This is not a private repository'}), 400
+    
+    try:
+        data = request.json
+        github_token = data.get('github_token')
+        
+        if not github_token:
+            return jsonify({'error': 'GitHub token is required for decryption'}), 400
+        
+        # Verify this is the same token used for encryption
+        original_token = job.get('config', {}).get('github_token')
+        if not original_token or github_token != original_token:
+            return jsonify({'error': 'Invalid GitHub token'}), 403
+        
+        # Decrypt the results
+        encrypted_results = job.get('encrypted_results')
+        if not encrypted_results:
+            return jsonify({'error': 'No encrypted results found'}), 404
+        
+        decrypted_results = decrypt_data(encrypted_results, github_token)
+        results = json.loads(decrypted_results)
+        
+        return jsonify({
+            'job_id': job_id,
+            'status': job['status'],
+            'repository_url': job['repository_url'],
+            'results': results,
+            'completed_at': job.get('completed_at')
+        })
+        
+    except Exception as e:
+        logger.error(f"Decryption error for job {job_id}: {str(e)}")
+        return jsonify({'error': 'Failed to decrypt results. Please check your GitHub token.'}), 400
+
+@app.route('/api/gitsnip/download/<job_id>', methods=['GET', 'POST'])
 def download_results(job_id):
     """Download analysis results as ZIP file"""
     if job_id not in jobs:
@@ -139,24 +292,81 @@ def download_results(job_id):
     if job['status'] != 'completed':
         return jsonify({'error': 'Analysis not completed yet'}), 400
     
-    output_dir = job.get('output_dir')
-    if not output_dir or not os.path.exists(output_dir):
-        return jsonify({'error': 'Results not found'}), 404
+    is_private = job.get('config', {}).get('is_private', False)
     
-    try:
-        # Create ZIP file
-        zip_path = f"{TEMP_DIR}/{job_id}_results.zip"
-        shutil.make_archive(zip_path.replace('.zip', ''), 'zip', output_dir)
+    if is_private:
+        # For private repos, require GitHub token for decryption
+        if request.method == 'GET':
+            return jsonify({
+                'error': 'GitHub token required for private repository download',
+                'requires_token': True
+            }), 400
         
-        return send_file(
-            zip_path,
-            as_attachment=True,
-            download_name=f"gitsnip_analysis_{job_id}.zip",
-            mimetype='application/zip'
-        )
-    except Exception as e:
-        logger.error(f"Error creating download: {str(e)}")
-        return jsonify({'error': 'Failed to create download'}), 500
+        try:
+            data = request.json
+            github_token = data.get('github_token')
+            
+            if not github_token:
+                return jsonify({'error': 'GitHub token is required'}), 400
+            
+            # Verify token
+            original_token = job.get('config', {}).get('github_token')
+            if not original_token or github_token != original_token:
+                return jsonify({'error': 'Invalid GitHub token'}), 403
+            
+            # Get encrypted archive
+            encrypted_archive = job.get('encrypted_archive')
+            if not encrypted_archive:
+                return jsonify({'error': 'No encrypted archive found'}), 404
+            
+            # Decrypt and create download
+            try:
+                key = generate_encryption_key(github_token)
+                fernet = Fernet(key)
+                
+                encrypted_bytes = base64.urlsafe_b64decode(encrypted_archive.encode())
+                decrypted_zip = fernet.decrypt(encrypted_bytes)
+                
+                # Create temporary file for download
+                temp_file = tempfile.NamedTemporaryFile(suffix='.zip', delete=False)
+                temp_file.write(decrypted_zip)
+                temp_file.close()
+                
+                return send_file(
+                    temp_file.name,
+                    as_attachment=True,
+                    download_name=f"gitsnip_analysis_{job_id}.zip",
+                    mimetype='application/zip'
+                )
+                
+            except Exception as e:
+                logger.error(f"Decryption error: {str(e)}")
+                return jsonify({'error': 'Failed to decrypt archive'}), 400
+                
+        except Exception as e:
+            logger.error(f"Download error for private repo: {str(e)}")
+            return jsonify({'error': 'Download failed'}), 500
+    
+    else:
+        # For public repos, normal download
+        output_dir = job.get('output_dir')
+        if not output_dir or not os.path.exists(output_dir):
+            return jsonify({'error': 'Results not found'}), 404
+        
+        try:
+            # Create ZIP file
+            zip_path = f"{TEMP_DIR}/{job_id}_results.zip"
+            shutil.make_archive(zip_path.replace('.zip', ''), 'zip', output_dir)
+            
+            return send_file(
+                zip_path,
+                as_attachment=True,
+                download_name=f"gitsnip_analysis_{job_id}.zip",
+                mimetype='application/zip'
+            )
+        except Exception as e:
+            logger.error(f"Error creating download: {str(e)}")
+            return jsonify({'error': 'Failed to create download'}), 500
 
 @app.route('/api/gitsnip/jobs', methods=['GET'])
 def list_jobs():
@@ -246,18 +456,55 @@ def run_gitsnip_analysis(job_id, repo_url, config):
             # Parse results
             results = parse_gitsnip_results(job_output_dir, repo_url)
             
-            # Update job with results
-            jobs[job_id].update({
-                'status': 'completed',
-                'progress': 100,
-                'message': 'Analysis completed successfully',
-                'output_dir': job_output_dir,
-                'results': results,
-                'completed_at': datetime.utcnow().isoformat(),
-                'updated_at': datetime.utcnow().isoformat()
-            })
+            # Check if this is a private repository
+            is_private = config.get('is_private', False)
+            github_token = config.get('github_token')
             
-            logger.info(f"Analysis job {job_id} completed successfully")
+            if is_private and github_token:
+                # Encrypt results for private repositories
+                update_job_status(job_id, 'running', 99, 'Encrypting results...')
+                
+                try:
+                    # Encrypt the results data
+                    encrypted_results = encrypt_data(results, github_token)
+                    
+                    # Create encrypted archive
+                    encrypted_archive = create_encrypted_archive(job_output_dir, github_token)
+                    
+                    # Update job with encrypted data
+                    jobs[job_id].update({
+                        'status': 'completed',
+                        'progress': 100,
+                        'message': 'Analysis completed successfully (encrypted)',
+                        'output_dir': job_output_dir,
+                        'encrypted_results': encrypted_results,
+                        'encrypted_archive': encrypted_archive,
+                        'completed_at': datetime.utcnow().isoformat(),
+                        'updated_at': datetime.utcnow().isoformat()
+                    })
+                    
+                    # Remove unencrypted output directory for security
+                    shutil.rmtree(job_output_dir, ignore_errors=True)
+                    
+                    logger.info(f"Private repo analysis job {job_id} completed and encrypted")
+                    
+                except Exception as e:
+                    logger.error(f"Encryption failed for job {job_id}: {str(e)}")
+                    update_job_status(job_id, 'failed', 0, f'Encryption failed: {str(e)}')
+                    return
+            else:
+                # Public repository - store results normally
+                jobs[job_id].update({
+                    'status': 'completed',
+                    'progress': 100,
+                    'message': 'Analysis completed successfully',
+                    'output_dir': job_output_dir,
+                    'results': results,
+                    'completed_at': datetime.utcnow().isoformat(),
+                    'updated_at': datetime.utcnow().isoformat()
+                })
+                
+                logger.info(f"Public repo analysis job {job_id} completed successfully")
             
         else:
             # Analysis failed

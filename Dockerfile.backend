@@ -27,7 +27,8 @@ RUN pip install --no-cache-dir \
     flask \
     flask-cors \
     gunicorn \
-    python-dotenv
+    python-dotenv \
+    cryptography
 
 # Copy source code
 COPY . .

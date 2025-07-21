@@ -161,8 +161,17 @@ function App() {
             
             if (resultsResponse.ok) {
               const resultsData = await resultsResponse.json()
-              setResults(formatAnalysisResults(resultsData))
-              setCurrentStep(5)
+              
+              // Check if results are encrypted (private repo)
+              if (resultsData.is_private && resultsData.encrypted_results) {
+                // For private repos, we need to decrypt the results
+                setResults('🔒 **Private Repository Results**\n\nResults are encrypted for security. Click "View Results" to decrypt and display.')
+                setCurrentStep(5)
+              } else {
+                // Public repo - display results normally
+                setResults(formatAnalysisResults(resultsData))
+                setCurrentStep(5)
+              }
             } else {
               throw new Error('Failed to get analysis results')
             }
@@ -231,6 +240,36 @@ The complete analysis results including all generated documentation, diagrams, a
 The analysis provides comprehensive insights into the codebase structure, key components, and their relationships to help you quickly understand and navigate the project.`
   }
 
+  const decryptAndViewResults = async () => {
+    if (!jobId || !isPrivateRepo || !githubToken) {
+      alert('Missing required information for decryption')
+      return
+    }
+
+    try {
+      const response = await fetch(`/api/gitsnip/decrypt/${jobId}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          github_token: githubToken
+        })
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to decrypt results')
+      }
+
+      const decryptedData = await response.json()
+      setResults(formatAnalysisResults(decryptedData))
+    } catch (error) {
+      console.error('Decryption error:', error)
+      alert(`Failed to decrypt results: ${error.message}`)
+    }
+  }
+
   const downloadResults = async () => {
     if (!jobId) {
       alert('No analysis results available for download')
@@ -238,22 +277,57 @@ The analysis provides comprehensive insights into the codebase structure, key co
     }
 
     try {
-      const response = await fetch(`/api/gitsnip/download/${jobId}`)
-      
-      if (!response.ok) {
-        throw new Error('Failed to download results')
-      }
+      if (isPrivateRepo) {
+        // For private repos, send token with download request
+        if (!githubToken) {
+          alert('GitHub token is required for private repository download')
+          return
+        }
 
-      // Create download link
-      const blob = await response.blob()
-      const url = window.URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `gitsnip_analysis_${jobId}.zip`
-      document.body.appendChild(a)
-      a.click()
-      window.URL.revokeObjectURL(url)
-      document.body.removeChild(a)
+        const response = await fetch(`/api/gitsnip/download/${jobId}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            github_token: githubToken
+          })
+        })
+        
+        if (!response.ok) {
+          const errorData = await response.json()
+          throw new Error(errorData.error || 'Failed to download results')
+        }
+
+        // Handle blob download
+        const blob = await response.blob()
+        const url = window.URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `gitsnip_analysis_${jobId}.zip`
+        document.body.appendChild(a)
+        a.click()
+        window.URL.revokeObjectURL(url)
+        document.body.removeChild(a)
+      } else {
+        // For public repos, normal GET request
+        const response = await fetch(`/api/gitsnip/download/${jobId}`)
+        
+        if (!response.ok) {
+          throw new Error('Failed to download results')
+        }
+
+        // Handle blob download
+        const blob = await response.blob()
+        const url = window.URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `gitsnip_analysis_${jobId}.zip`
+        document.body.appendChild(a)
+        a.click()
+        window.URL.revokeObjectURL(url)
+        document.body.removeChild(a)
+      }
     } catch (error) {
       console.error('Download error:', error)
       alert(`Download failed: ${error.message}`)
@@ -650,12 +724,31 @@ The analysis provides comprehensive insights into the codebase structure, key co
                 <FileText className="w-5 h-5" />
                 <span>Analysis Results</span>
               </CardTitle>
-              <Button variant="outline" size="sm" onClick={downloadResults} disabled={!jobId}>
-                <Download className="w-4 h-4 mr-2" />
-                Download
-              </Button>
+              <div className="flex space-x-2">
+                {isPrivateRepo && results.includes('🔒') && (
+                  <Button variant="outline" size="sm" onClick={decryptAndViewResults}>
+                    <Key className="w-4 h-4 mr-2" />
+                    View Results
+                  </Button>
+                )}
+                <Button variant="outline" size="sm" onClick={downloadResults} disabled={!jobId}>
+                  <Download className="w-4 h-4 mr-2" />
+                  Download
+                </Button>
+              </div>
             </CardHeader>
             <CardContent>
+              {isPrivateRepo && results.includes('🔒') && (
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+                  <div className="flex items-center space-x-2 text-blue-800">
+                    <Key className="w-5 h-5" />
+                    <span className="font-medium">Private Repository</span>
+                  </div>
+                  <p className="text-sm text-blue-700 mt-2">
+                    Results are encrypted for security. Click "View Results" to decrypt and display the analysis using your GitHub token.
+                  </p>
+                </div>
+              )}
               <div className="bg-gray-50 rounded-lg p-4 max-h-96 overflow-y-auto">
                 <pre className="whitespace-pre-wrap text-sm">{results || 'Loading results...'}</pre>
               </div>
