@@ -65,7 +65,7 @@ NODE_ENV=production
 FLASK_ENV=production
 
 # Ports (change if needed)
-FRONTEND_PORT=80
+FRONTEND_PORT=8000
 BACKEND_PORT=5000
 PROXY_PORT=8080
 
@@ -87,8 +87,7 @@ deploy_frontend() {
     docker-compose up -d frontend
     
     print_success "Frontend deployed successfully!"
-    print_status "Frontend is available at: http://localhost"
-    print_status "Health check: http://localhost/health"
+    print_status "Frontend is available at: http://localhost:8000"
 }
 
 # Deploy full stack
@@ -99,11 +98,8 @@ deploy_fullstack() {
     docker-compose --profile backend up -d
     
     print_success "Full stack deployed successfully!"
-    print_status "Frontend: http://localhost"
+    print_status "Frontend: http://localhost:8000"
     print_status "Backend API: http://localhost:5000"
-    print_status "Health checks:"
-    print_status "  - Frontend: http://localhost/health"
-    print_status "  - Backend: http://localhost:5000/health"
 }
 
 # Deploy with proxy
@@ -173,7 +169,7 @@ show_status() {
     print_status "Health Checks:"
     
     # Check frontend
-    if curl -s http://localhost/health > /dev/null 2>&1; then
+    if curl -s http://localhost:8000/ > /dev/null 2>&1; then
         print_success "Frontend: Healthy"
     else
         print_error "Frontend: Unhealthy or not running"

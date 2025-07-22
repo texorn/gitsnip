@@ -8,13 +8,12 @@ services:
       dockerfile: Dockerfile
     container_name: gitsnip-frontend
     ports:
-      - "80:80"
-      - "443:443"
+      - "8000:80"
     environment:
       - NODE_ENV=production
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      test: ["CMD", "curl", "-f", "http://localhost/"]
       interval: 30s
       timeout: 10s
       retries: 3
