@@ -1,5 +1,5 @@
 services:
-  # GitSnip React Frontend
+  # GitSnip React Frontend (Frontend-only)
   frontend:
     build:
       context: ./frontend/react-app
@@ -11,7 +11,7 @@ services:
       - NODE_ENV=production
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost/"]
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -20,6 +20,31 @@ services:
       - gitsnip-network
     profiles:
       - frontend
+
+  # GitSnip React Frontend (Full-stack with backend proxy)
+  frontend-fullstack:
+    build:
+      context: ./frontend/react-app
+      dockerfile: Dockerfile
+    container_name: gitsnip-frontend-fullstack
+    ports:
+      - "${FRONTEND_PORT:-8000}:80"
+    environment:
+      - NODE_ENV=production
+    volumes:
+      - ./frontend/react-app/nginx-fullstack.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - gitsnip-network
+    profiles:
       - fullstack
 
   # GitSnip Python Backend
@@ -62,7 +87,7 @@ services:
     volumes:
       - ./nginx-proxy.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
-      - frontend
+      - frontend-fullstack
       - backend
     restart: unless-stopped
     networks:

@@ -169,7 +169,7 @@ deploy_fullstack() {
     print_status "Deploying GitSnip Full Stack..."
     
     # Build and start all services
-    $DOCKER_COMPOSE_CMD up -d --build backend frontend
+    $DOCKER_COMPOSE_CMD up -d --build backend frontend-fullstack
     
     print_success "Full stack deployed successfully!"
     print_status "Frontend: http://localhost:8000"
