@@ -149,7 +149,7 @@ GitSnip offers two analysis modes to suit different needs:
 ### Prerequisites
 
 - **Docker & Docker Compose** (recommended)
-- **Node.js 20+** and **pnpm** (for frontend development)
+- **Node.js 20+** and **npm** (for frontend development)
 - **Python 3.11+** (for backend development)
 - **Git** (for cloning)
 
@@ -180,11 +180,11 @@ This will automatically:
 # Navigate to frontend
 cd frontend/react-app
 
-# Install dependencies
-pnpm install
+# Install dependencies (use legacy peer deps for React 19 compatibility)
+npm install --legacy-peer-deps
 
 # Start development server
-pnpm run dev --host
+npm run dev -- --host
 # Access at: http://localhost:5173
 ```
 

@@ -226,11 +226,11 @@ deploy_dev() {
     # Install frontend dependencies if needed
     if [ ! -d "node_modules" ]; then
         print_status "Installing frontend dependencies..."
-        pnpm install
+        npm install --legacy-peer-deps
     fi
     
     # Start frontend dev server
-    pnpm run dev --host &
+    npm run dev -- --host &
     FRONTEND_PID=$!
     
     cd ../..
