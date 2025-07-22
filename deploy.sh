@@ -39,45 +39,67 @@ check_docker() {
         # Install Docker
         curl -fsSL https://get.docker.com -o get-docker.sh
         sudo sh get-docker.sh
-        sudo usermod -aG docker $USER
-        print_success "Docker installed. Please log out and log back in, then run this script again."
+        
+        # Try to add user to docker group if usermod exists
+        if command -v usermod &> /dev/null; then
+            sudo usermod -aG docker $USER
+            print_success "Docker installed. Please log out and log back in, then run this script again."
+        else
+            print_success "Docker installed."
+            print_warning "Please add your user to the docker group manually or use sudo with Docker commands."
+        fi
         exit 1
     fi
     
-    # Check if user is in docker group
-    if ! groups $USER | grep -q docker; then
+    # Check if user is in docker group (only if usermod exists)
+    if command -v usermod &> /dev/null && ! groups $USER | grep -q docker; then
         print_warning "User $USER is not in docker group. Adding to docker group..."
-        sudo usermod -aG docker $USER
-        print_warning "Please log out and log back in for group changes to take effect."
-        print_status "Alternatively, you can run: newgrp docker"
+        if sudo usermod -aG docker $USER 2>/dev/null; then
+            print_warning "Please log out and log back in for group changes to take effect."
+            print_status "Alternatively, you can run: newgrp docker"
+        else
+            print_warning "Could not add user to docker group. Will use sudo for Docker commands."
+        fi
     fi
     
-    # Check if Docker daemon is running
-    if ! docker info &> /dev/null; then
-        print_status "Starting Docker daemon..."
-        sudo systemctl start docker || sudo service docker start
-        sleep 3
-        
-        # Try without sudo if user is in docker group
-        if ! docker info &> /dev/null; then
-            print_warning "Docker requires sudo. This is normal if you just added user to docker group."
-            DOCKER_CMD="sudo docker"
-            DOCKER_COMPOSE_CMD="sudo docker-compose"
-        else
-            DOCKER_CMD="docker"
-            DOCKER_COMPOSE_CMD="docker-compose"
-        fi
-    else
+    # Check if Docker daemon is running and determine command prefix
+    if docker info &> /dev/null 2>&1; then
         DOCKER_CMD="docker"
         DOCKER_COMPOSE_CMD="docker-compose"
+        print_success "Docker is ready (no sudo required)"
+    elif sudo docker info &> /dev/null 2>&1; then
+        print_status "Starting Docker daemon..."
+        sudo systemctl start docker 2>/dev/null || sudo service docker start 2>/dev/null || true
+        sleep 3
+        
+        # Check again after starting
+        if docker info &> /dev/null 2>&1; then
+            DOCKER_CMD="docker"
+            DOCKER_COMPOSE_CMD="docker-compose"
+            print_success "Docker is ready (no sudo required)"
+        else
+            DOCKER_CMD="sudo docker"
+            DOCKER_COMPOSE_CMD="sudo docker-compose"
+            print_warning "Docker requires sudo privileges"
+        fi
+    else
+        print_error "Docker is not running and cannot be started. Please check Docker installation."
+        exit 1
     fi
     
     # Check for docker-compose
     if ! command -v docker-compose &> /dev/null; then
-        if ! docker compose version &> /dev/null; then
+        if ! docker compose version &> /dev/null 2>&1; then
             print_status "Installing Docker Compose..."
-            sudo apt-get update
-            sudo apt-get install -y docker-compose
+            if command -v apt-get &> /dev/null; then
+                sudo apt-get update && sudo apt-get install -y docker-compose
+            elif command -v yum &> /dev/null; then
+                sudo yum install -y docker-compose
+            elif command -v brew &> /dev/null; then
+                brew install docker-compose
+            else
+                print_warning "Please install Docker Compose manually"
+            fi
         fi
     fi
     
@@ -374,13 +396,19 @@ show_menu() {
     echo "Select deployment option:"
     echo "1) Deploy Frontend Only (Docker)"
     echo "2) Deploy Full Stack (Docker)"
-    echo "3) Development Mode (No Docker)"
+    echo "3) Development Mode (No Docker) - Recommended if Docker issues"
     echo "4) Stop All Services"
     echo "5) Show Logs"
     echo "6) Show Status"
     echo "7) Test Application"
     echo "8) Exit"
     echo ""
+    
+    if [[ "$DOCKER_CMD" == *"sudo"* ]]; then
+        echo "Note: Docker requires sudo on this system."
+        echo "Consider using Development Mode (option 3) for easier setup."
+        echo ""
+    fi
 }
 
 # Main script
