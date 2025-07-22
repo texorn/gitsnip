@@ -16,6 +16,8 @@ function App() {
   const [currentStep, setCurrentStep] = useState(1)
   const [repoUrl, setRepoUrl] = useState('')
   const [isPrivateRepo, setIsPrivateRepo] = useState(false)
+  const [analysisMode, setAnalysisMode] = useState('fast') // New: analysis mode
+  const [userApiKey, setUserApiKey] = useState('') // New: user's Gemini API key
   const [includePatterns, setIncludePatterns] = useState(['*.py'])
   const [excludePatterns, setExcludePatterns] = useState([])
   const [maxFileSize, setMaxFileSize] = useState(100000)
@@ -82,6 +84,14 @@ function App() {
   }
 
   const proceedToAuth = () => {
+    // Validate analysis mode requirements
+    if (analysisMode === 'detailed' && !userApiKey) {
+      setErrors({ apiKey: 'Gemini API key is required for detailed analysis' })
+      return
+    }
+    
+    setErrors({})
+    
     if (isPrivateRepo) {
       setCurrentStep(3)
     } else {
@@ -112,6 +122,8 @@ function App() {
       // Prepare analysis request
       const analysisData = {
         repository_url: repoUrl,
+        analysis_mode: analysisMode, // New: include analysis mode
+        user_api_key: analysisMode === 'detailed' ? userApiKey : undefined, // New: include user API key for detailed mode
         config: {
           include_patterns: includePatterns,
           exclude_patterns: excludePatterns,
@@ -342,6 +354,8 @@ The analysis provides comprehensive insights into the codebase structure, key co
     setCurrentStep(1)
     setRepoUrl('')
     setIsPrivateRepo(false)
+    setAnalysisMode('fast') // Reset analysis mode
+    setUserApiKey('') // Reset user API key
     setIncludePatterns(['*.py'])
     setExcludePatterns([])
     setMaxFileSize(100000)
@@ -519,6 +533,101 @@ The analysis provides comprehensive insights into the codebase structure, key co
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-6">
+              {/* Analysis Mode Selection */}
+              <div className="space-y-4">
+                <div>
+                  <Label className="text-base font-semibold">Analysis Mode</Label>
+                  <p className="text-sm text-gray-600 mb-3">Choose between quick analysis or comprehensive analysis</p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <Card 
+                      className={`cursor-pointer transition-all ${analysisMode === 'fast' ? 'border-orange-500 bg-orange-50' : 'border-gray-200 hover:border-gray-300'}`}
+                      onClick={() => setAnalysisMode('fast')}
+                    >
+                      <CardContent className="p-4">
+                        <div className="flex items-start space-x-3">
+                          <div className={`w-4 h-4 rounded-full border-2 mt-1 ${analysisMode === 'fast' ? 'border-orange-500 bg-orange-500' : 'border-gray-300'}`}>
+                            {analysisMode === 'fast' && <div className="w-2 h-2 bg-white rounded-full m-0.5"></div>}
+                          </div>
+                          <div className="flex-1">
+                            <h3 className="font-semibold text-sm">⚡ Fast Analysis</h3>
+                            <p className="text-xs text-gray-600 mt-1">Quick analysis of top 5 files using Gemini 2.5 Flash-Lite Preview</p>
+                            <div className="mt-2 space-y-1">
+                              <div className="flex items-center text-xs text-green-600">
+                                <CheckCircle className="w-3 h-3 mr-1" />
+                                <span>Free to use</span>
+                              </div>
+                              <div className="flex items-center text-xs text-green-600">
+                                <CheckCircle className="w-3 h-3 mr-1" />
+                                <span>~30 seconds</span>
+                              </div>
+                              <div className="flex items-center text-xs text-gray-500">
+                                <Info className="w-3 h-3 mr-1" />
+                                <span>Limited to 5 files</span>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                    
+                    <Card 
+                      className={`cursor-pointer transition-all ${analysisMode === 'detailed' ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'}`}
+                      onClick={() => setAnalysisMode('detailed')}
+                    >
+                      <CardContent className="p-4">
+                        <div className="flex items-start space-x-3">
+                          <div className={`w-4 h-4 rounded-full border-2 mt-1 ${analysisMode === 'detailed' ? 'border-blue-500 bg-blue-500' : 'border-gray-300'}`}>
+                            {analysisMode === 'detailed' && <div className="w-2 h-2 bg-white rounded-full m-0.5"></div>}
+                          </div>
+                          <div className="flex-1">
+                            <h3 className="font-semibold text-sm">🔍 Detailed Analysis</h3>
+                            <p className="text-xs text-gray-600 mt-1">Comprehensive analysis using your Gemini API key</p>
+                            <div className="mt-2 space-y-1">
+                              <div className="flex items-center text-xs text-blue-600">
+                                <CheckCircle className="w-3 h-3 mr-1" />
+                                <span>Unlimited files</span>
+                              </div>
+                              <div className="flex items-center text-xs text-blue-600">
+                                <CheckCircle className="w-3 h-3 mr-1" />
+                                <span>Deep insights</span>
+                              </div>
+                              <div className="flex items-center text-xs text-gray-500">
+                                <Key className="w-3 h-3 mr-1" />
+                                <span>Requires your API key</span>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </div>
+                </div>
+                
+                {/* API Key Input for Detailed Mode */}
+                {analysisMode === 'detailed' && (
+                  <div className="space-y-2">
+                    <Label htmlFor="userApiKey">Your Gemini API Key</Label>
+                    <Input
+                      id="userApiKey"
+                      type="password"
+                      placeholder="AIzaSy..."
+                      value={userApiKey}
+                      onChange={(e) => setUserApiKey(e.target.value)}
+                      className={errors.apiKey ? 'border-red-500' : ''}
+                    />
+                    {errors.apiKey && (
+                      <p className="text-red-500 text-sm">{errors.apiKey}</p>
+                    )}
+                    <p className="text-sm text-gray-600">
+                      Get your free API key from{' '}
+                      <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+                        Google AI Studio
+                      </a>
+                    </p>
+                  </div>
+                )}
+              </div>
+              
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="space-y-4">
                   <div>

@@ -32,9 +32,9 @@ app = Flask(__name__)
 CORS(app)
 
 # Configuration
-OUTPUT_DIR = "/app/output"
-TEMP_DIR = "/app/temp"
-DATA_DIR = "/app/data"
+OUTPUT_DIR = os.path.join(os.getcwd(), "output")
+TEMP_DIR = os.path.join(os.getcwd(), "temp")
+DATA_DIR = os.path.join(os.getcwd(), "data")
 
 # Ensure directories exist
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -147,9 +147,19 @@ def start_analysis():
         data = request.json
         repo_url = data.get('repository_url')
         config = data.get('config', {})
+        analysis_mode = data.get('analysis_mode', 'fast')  # Default to fast mode
+        user_api_key = data.get('user_api_key')  # For detailed analysis
         
         if not repo_url:
             return jsonify({'error': 'Repository URL is required'}), 400
+        
+        # Validate analysis mode
+        if analysis_mode not in ['fast', 'detailed']:
+            return jsonify({'error': 'Analysis mode must be "fast" or "detailed"'}), 400
+        
+        # For detailed analysis, require user API key
+        if analysis_mode == 'detailed' and not user_api_key:
+            return jsonify({'error': 'User API key is required for detailed analysis'}), 400
         
         # Validate repository URL
         if not (repo_url.startswith('https://github.com/') or repo_url.startswith('http://github.com/')):
@@ -163,22 +173,25 @@ def start_analysis():
             'message': 'Analysis queued',
             'repository_url': repo_url,
             'config': config,
+            'analysis_mode': analysis_mode,
+            'user_api_key': user_api_key,
             'created_at': datetime.utcnow().isoformat(),
             'output_dir': None,
             'results': None
         }
         
         # Start analysis in background thread
-        thread = threading.Thread(target=run_gitsnip_analysis, args=(job_id, repo_url, config))
+        thread = threading.Thread(target=run_gitsnip_analysis, args=(job_id, repo_url, config, analysis_mode, user_api_key))
         thread.daemon = True
         thread.start()
         
-        logger.info(f"Started analysis job {job_id} for repository {repo_url}")
+        logger.info(f"Started {analysis_mode} analysis job {job_id} for repository {repo_url}")
         
         return jsonify({
             'job_id': job_id,
             'status': 'queued',
-            'message': 'Analysis started'
+            'message': f'{analysis_mode.title()} analysis started',
+            'analysis_mode': analysis_mode
         })
         
     except Exception as e:
@@ -383,13 +396,13 @@ def list_jobs():
     
     return jsonify({'jobs': job_list})
 
-def run_gitsnip_analysis(job_id, repo_url, config):
+def run_gitsnip_analysis(job_id, repo_url, config, analysis_mode='fast', user_api_key=None):
     """Run the actual GitSnip analysis"""
     try:
         job = jobs[job_id]
         
         # Update status
-        update_job_status(job_id, 'running', 5, 'Preparing analysis environment...')
+        update_job_status(job_id, 'running', 5, f'Preparing {analysis_mode} analysis environment...')
         
         # Create unique output directory for this job
         job_output_dir = os.path.join(OUTPUT_DIR, job_id)
@@ -399,8 +412,13 @@ def run_gitsnip_analysis(job_id, repo_url, config):
         cmd = [
             'python3', 'main.py',
             '--repo', repo_url,
-            '--output', job_output_dir
+            '--output', job_output_dir,
+            '--analysis-mode', analysis_mode
         ]
+        
+        # Add user API key for detailed analysis
+        if analysis_mode == 'detailed' and user_api_key:
+            cmd.extend(['--user-api-key', user_api_key])
         
         # Add configuration options
         if config.get('include_patterns'):
@@ -411,16 +429,23 @@ def run_gitsnip_analysis(job_id, repo_url, config):
             for pattern in config['exclude_patterns']:
                 cmd.extend(['--exclude', pattern])
         
-        if config.get('max_file_size'):
-            cmd.extend(['--max-file-size', str(config['max_file_size'])])
+        # Set file size limits based on analysis mode
+        if analysis_mode == 'fast':
+            # Fast mode: smaller file size limit
+            max_file_size = config.get('max_file_size', 10000)  # 10KB default for fast
+        else:
+            # Detailed mode: larger file size limit
+            max_file_size = config.get('max_file_size', 50000)  # 50KB default for detailed
+        
+        cmd.extend(['--max-size', str(max_file_size)])
         
         if config.get('language'):
             cmd.extend(['--language', config['language']])
         
-        logger.info(f"Running GitSnip command: {' '.join(cmd)}")
+        logger.info(f"Running GitSnip command ({analysis_mode} mode): {' '.join(cmd)}")
         
         # Update status
-        update_job_status(job_id, 'running', 10, 'Starting GitSnip analysis...')
+        update_job_status(job_id, 'running', 10, f'Starting {analysis_mode} GitSnip analysis...')
         
         # Run GitSnip with progress monitoring
         process = subprocess.Popen(
@@ -431,15 +456,24 @@ def run_gitsnip_analysis(job_id, repo_url, config):
             cwd='/app'
         )
         
-        # Monitor progress (simplified - in reality, GitSnip would need to output progress)
-        progress_steps = [
-            (20, 'Cloning repository...'),
-            (35, 'Analyzing code structure...'),
-            (50, 'Identifying abstractions...'),
-            (65, 'Analyzing relationships...'),
-            (80, 'Generating documentation...'),
-            (95, 'Creating diagrams...')
-        ]
+        # Monitor progress (different steps for different modes)
+        if analysis_mode == 'fast':
+            progress_steps = [
+                (20, 'Cloning repository...'),
+                (40, 'Analyzing top 5 files...'),
+                (60, 'Generating quick summary...'),
+                (80, 'Creating fast documentation...'),
+                (95, 'Finalizing quick analysis...')
+            ]
+        else:
+            progress_steps = [
+                (20, 'Cloning repository...'),
+                (35, 'Analyzing code structure...'),
+                (50, 'Identifying abstractions...'),
+                (65, 'Analyzing relationships...'),
+                (80, 'Generating comprehensive documentation...'),
+                (95, 'Creating detailed diagrams...')
+            ]
         
         for progress, message in progress_steps:
             if process.poll() is None:  # Process still running
@@ -454,7 +488,7 @@ def run_gitsnip_analysis(job_id, repo_url, config):
             update_job_status(job_id, 'running', 98, 'Finalizing results...')
             
             # Parse results
-            results = parse_gitsnip_results(job_output_dir, repo_url)
+            results = parse_gitsnip_results(job_output_dir, repo_url, analysis_mode)
             
             # Check if this is a private repository
             is_private = config.get('is_private', False)
@@ -475,10 +509,11 @@ def run_gitsnip_analysis(job_id, repo_url, config):
                     jobs[job_id].update({
                         'status': 'completed',
                         'progress': 100,
-                        'message': 'Analysis completed successfully (encrypted)',
+                        'message': f'{analysis_mode.title()} analysis completed successfully (encrypted)',
                         'output_dir': job_output_dir,
                         'encrypted_results': encrypted_results,
                         'encrypted_archive': encrypted_archive,
+                        'analysis_mode': analysis_mode,
                         'completed_at': datetime.utcnow().isoformat(),
                         'updated_at': datetime.utcnow().isoformat()
                     })
@@ -486,7 +521,7 @@ def run_gitsnip_analysis(job_id, repo_url, config):
                     # Remove unencrypted output directory for security
                     shutil.rmtree(job_output_dir, ignore_errors=True)
                     
-                    logger.info(f"Private repo analysis job {job_id} completed and encrypted")
+                    logger.info(f"Private repo {analysis_mode} analysis job {job_id} completed and encrypted")
                     
                 except Exception as e:
                     logger.error(f"Encryption failed for job {job_id}: {str(e)}")
@@ -497,25 +532,26 @@ def run_gitsnip_analysis(job_id, repo_url, config):
                 jobs[job_id].update({
                     'status': 'completed',
                     'progress': 100,
-                    'message': 'Analysis completed successfully',
+                    'message': f'{analysis_mode.title()} analysis completed successfully',
                     'output_dir': job_output_dir,
                     'results': results,
+                    'analysis_mode': analysis_mode,
                     'completed_at': datetime.utcnow().isoformat(),
                     'updated_at': datetime.utcnow().isoformat()
                 })
                 
-                logger.info(f"Public repo analysis job {job_id} completed successfully")
+                logger.info(f"Public repo {analysis_mode} analysis job {job_id} completed successfully")
             
         else:
             # Analysis failed
             error_message = stderr or stdout or 'Unknown error occurred'
-            update_job_status(job_id, 'failed', 0, f'Analysis failed: {error_message}')
-            logger.error(f"Analysis job {job_id} failed: {error_message}")
+            update_job_status(job_id, 'failed', 0, f'{analysis_mode.title()} analysis failed: {error_message}')
+            logger.error(f"{analysis_mode.title()} analysis job {job_id} failed: {error_message}")
             
     except Exception as e:
-        error_message = f'Analysis failed: {str(e)}'
+        error_message = f'{analysis_mode.title()} analysis failed: {str(e)}'
         update_job_status(job_id, 'failed', 0, error_message)
-        logger.error(f"Analysis job {job_id} failed with exception: {str(e)}")
+        logger.error(f"{analysis_mode.title()} analysis job {job_id} failed with exception: {str(e)}")
 
 def update_job_status(job_id, status, progress, message):
     """Update job status"""
@@ -527,11 +563,12 @@ def update_job_status(job_id, status, progress, message):
             'updated_at': datetime.utcnow().isoformat()
         })
 
-def parse_gitsnip_results(output_dir, repo_url):
+def parse_gitsnip_results(output_dir, repo_url, analysis_mode='fast'):
     """Parse GitSnip analysis results"""
     try:
         results = {
             'repository_url': repo_url,
+            'analysis_mode': analysis_mode,
             'analysis_summary': {},
             'files': [],
             'documentation': []
@@ -560,10 +597,12 @@ def parse_gitsnip_results(output_dir, repo_url):
                 all_files = glob.glob(os.path.join(project_path, '**/*'), recursive=True)
                 results['analysis_summary']['total_files'] = len([f for f in all_files if os.path.isfile(f)])
         
-        # Basic statistics
+        # Basic statistics with mode-specific info
         results['analysis_summary'].update({
             'generated_files': len(markdown_files),
             'analysis_date': datetime.utcnow().isoformat(),
+            'analysis_mode': analysis_mode,
+            'mode_description': 'Quick analysis with top 5 files' if analysis_mode == 'fast' else 'Comprehensive analysis with detailed insights',
             'status': 'completed'
         })
         
@@ -573,6 +612,7 @@ def parse_gitsnip_results(output_dir, repo_url):
         logger.error(f"Error parsing results: {str(e)}")
         return {
             'repository_url': repo_url,
+            'analysis_mode': analysis_mode,
             'error': f'Failed to parse results: {str(e)}',
             'analysis_date': datetime.utcnow().isoformat()
         }
@@ -586,12 +626,10 @@ def internal_error(error):
     return jsonify({'error': 'Internal server error'}), 500
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
+    port = int(os.environ.get('PORT', 4000))
     debug = os.environ.get('FLASK_ENV') == 'development'
-    
     logger.info(f"Starting GitSnip API server on port {port}")
     logger.info(f"Output directory: {OUTPUT_DIR}")
     logger.info(f"Temp directory: {TEMP_DIR}")
     
     app.run(host='0.0.0.0', port=port, debug=debug)
-
