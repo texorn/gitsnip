@@ -23,6 +23,7 @@ import logging
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from job_manager import job_manager
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -40,9 +41,6 @@ DATA_DIR = os.path.join(os.getcwd(), "data")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(TEMP_DIR, exist_ok=True)
 os.makedirs(DATA_DIR, exist_ok=True)
-
-# Store job status in memory (in production, use Redis or database)
-jobs = {}
 
 def generate_encryption_key(github_token, salt=None):
     """Generate encryption key from GitHub token"""
@@ -165,23 +163,19 @@ def start_analysis():
         if not (repo_url.startswith('https://github.com/') or repo_url.startswith('http://github.com/')):
             return jsonify({'error': 'Only GitHub repositories are supported'}), 400
         
-        job_id = str(uuid.uuid4())
-        jobs[job_id] = {
-            'job_id': job_id,
-            'status': 'queued',
-            'progress': 0,
-            'message': 'Analysis queued',
-            'repository_url': repo_url,
-            'config': config,
-            'analysis_mode': analysis_mode,
-            'user_api_key': user_api_key,
-            'created_at': datetime.utcnow().isoformat(),
-            'output_dir': None,
-            'results': None
+        # Create job using job manager
+        job_config = {
+            'include_patterns': config.get('include_patterns', ['*.py']),
+            'exclude_patterns': config.get('exclude_patterns', []),
+            'max_file_size': config.get('max_file_size', 100000),
+            'language': config.get('language', 'english'),
+            'api_key': user_api_key
         }
         
+        job_id = job_manager.create_job(repo_url, analysis_mode, job_config)
+        
         # Start analysis in background thread
-        thread = threading.Thread(target=run_gitsnip_analysis, args=(job_id, repo_url, config, analysis_mode, user_api_key))
+        thread = threading.Thread(target=run_gitsnip_analysis, args=(job_id, repo_url, job_config, analysis_mode, user_api_key))
         thread.daemon = True
         thread.start()
         
@@ -189,10 +183,11 @@ def start_analysis():
         
         return jsonify({
             'job_id': job_id,
-            'status': 'queued',
+            'status': 'pending',
             'message': f'{analysis_mode.title()} analysis started',
-            'analysis_mode': analysis_mode
-        })
+            'analysis_mode': analysis_mode,
+            'redirect_url': f'/job/{job_id}'
+        }), 202
         
     except Exception as e:
         logger.error(f"Error starting analysis: {str(e)}")
@@ -200,18 +195,57 @@ def start_analysis():
 
 @app.route('/api/gitsnip/status/<job_id>', methods=['GET'])
 def get_status(job_id):
-    """Get analysis status"""
-    if job_id not in jobs:
+    """Get job status and progress"""
+    job_data = job_manager.get_job(job_id)
+    
+    if not job_data:
         return jsonify({'error': 'Job not found'}), 404
     
-    job = jobs[job_id]
     return jsonify({
         'job_id': job_id,
-        'status': job['status'],
-        'progress': job['progress'],
-        'message': job['message'],
-        'created_at': job['created_at'],
-        'updated_at': job.get('updated_at', job['created_at'])
+        'status': job_data['status'],
+        'progress': job_data['progress'],
+        'message': job_data['message'],
+        'created_at': job_data['created_at'],
+        'updated_at': job_data['updated_at'],
+        'analysis_mode': job_data['analysis_mode'],
+        'repository_url': job_data['repository_url']
+    })
+
+@app.route('/api/gitsnip/results/<job_id>', methods=['GET'])
+def get_results(job_id):
+    """Get analysis results"""
+    job_data = job_manager.get_job(job_id)
+    
+    if not job_data:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    if job_data['status'] != 'completed':
+        return jsonify({
+            'error': 'Analysis not completed yet',
+            'status': job_data['status'],
+            'progress': job_data['progress'],
+            'message': job_data['message']
+        }), 400
+    
+    return jsonify({
+        'job_id': job_id,
+        'status': job_data['status'],
+        'repository_url': job_data['repository_url'],
+        'analysis_mode': job_data['analysis_mode'],
+        'results': job_data['result'],
+        'completed_at': job_data['updated_at']
+    })
+
+@app.route('/api/jobs', methods=['GET'])
+def list_jobs():
+    """Get list of recent jobs"""
+    limit = request.args.get('limit', 50, type=int)
+    jobs = job_manager.get_job_list(limit)
+    
+    return jsonify({
+        'jobs': jobs,
+        'total': len(jobs)
     })
 
 @app.route('/api/gitsnip/results/<job_id>', methods=['GET'])
@@ -399,10 +433,8 @@ def list_jobs():
 def run_gitsnip_analysis(job_id, repo_url, config, analysis_mode='fast', user_api_key=None):
     """Run the actual GitSnip analysis"""
     try:
-        job = jobs[job_id]
-        
         # Update status
-        update_job_status(job_id, 'running', 5, f'Preparing {analysis_mode} analysis environment...')
+        job_manager.update_job_status(job_id, 'running', 5, f'Preparing {analysis_mode} analysis environment...')
         
         # Create unique output directory for this job
         job_output_dir = os.path.join(OUTPUT_DIR, job_id)
@@ -418,7 +450,7 @@ def run_gitsnip_analysis(job_id, repo_url, config, analysis_mode='fast', user_ap
         
         # Add user API key for detailed analysis
         if analysis_mode == 'detailed' and user_api_key:
-            cmd.extend(['--user-api-key', user_api_key])
+            os.environ['USER_GEMINI_API_KEY'] = user_api_key
         
         # Add configuration options
         if config.get('include_patterns'):
@@ -445,7 +477,7 @@ def run_gitsnip_analysis(job_id, repo_url, config, analysis_mode='fast', user_ap
         logger.info(f"Running GitSnip command ({analysis_mode} mode): {' '.join(cmd)}")
         
         # Update status
-        update_job_status(job_id, 'running', 10, f'Starting {analysis_mode} GitSnip analysis...')
+        job_manager.update_job_status(job_id, 'running', 10, f'Starting {analysis_mode} GitSnip analysis...')
         
         # Run GitSnip with progress monitoring
         process = subprocess.Popen(
@@ -477,7 +509,7 @@ def run_gitsnip_analysis(job_id, repo_url, config, analysis_mode='fast', user_ap
         
         for progress, message in progress_steps:
             if process.poll() is None:  # Process still running
-                update_job_status(job_id, 'running', progress, message)
+                job_manager.update_job_status(job_id, 'running', progress, message)
                 time.sleep(2)  # Simulate time for each step
         
         # Wait for process to complete
@@ -485,83 +517,25 @@ def run_gitsnip_analysis(job_id, repo_url, config, analysis_mode='fast', user_ap
         
         if process.returncode == 0:
             # Analysis completed successfully
-            update_job_status(job_id, 'running', 98, 'Finalizing results...')
+            job_manager.update_job_status(job_id, 'running', 98, 'Finalizing results...')
             
             # Parse results
             results = parse_gitsnip_results(job_output_dir, repo_url, analysis_mode)
             
-            # Check if this is a private repository
-            is_private = config.get('is_private', False)
-            github_token = config.get('github_token')
-            
-            if is_private and github_token:
-                # Encrypt results for private repositories
-                update_job_status(job_id, 'running', 99, 'Encrypting results...')
-                
-                try:
-                    # Encrypt the results data
-                    encrypted_results = encrypt_data(results, github_token)
-                    
-                    # Create encrypted archive
-                    encrypted_archive = create_encrypted_archive(job_output_dir, github_token)
-                    
-                    # Update job with encrypted data
-                    jobs[job_id].update({
-                        'status': 'completed',
-                        'progress': 100,
-                        'message': f'{analysis_mode.title()} analysis completed successfully (encrypted)',
-                        'output_dir': job_output_dir,
-                        'encrypted_results': encrypted_results,
-                        'encrypted_archive': encrypted_archive,
-                        'analysis_mode': analysis_mode,
-                        'completed_at': datetime.utcnow().isoformat(),
-                        'updated_at': datetime.utcnow().isoformat()
-                    })
-                    
-                    # Remove unencrypted output directory for security
-                    shutil.rmtree(job_output_dir, ignore_errors=True)
-                    
-                    logger.info(f"Private repo {analysis_mode} analysis job {job_id} completed and encrypted")
-                    
-                except Exception as e:
-                    logger.error(f"Encryption failed for job {job_id}: {str(e)}")
-                    update_job_status(job_id, 'failed', 0, f'Encryption failed: {str(e)}')
-                    return
-            else:
-                # Public repository - store results normally
-                jobs[job_id].update({
-                    'status': 'completed',
-                    'progress': 100,
-                    'message': f'{analysis_mode.title()} analysis completed successfully',
-                    'output_dir': job_output_dir,
-                    'results': results,
-                    'analysis_mode': analysis_mode,
-                    'completed_at': datetime.utcnow().isoformat(),
-                    'updated_at': datetime.utcnow().isoformat()
-                })
-                
-                logger.info(f"Public repo {analysis_mode} analysis job {job_id} completed successfully")
+            # Complete the job
+            job_manager.complete_job(job_id, results)
+            logger.info(f"{analysis_mode.title()} analysis job {job_id} completed successfully")
             
         else:
             # Analysis failed
             error_message = stderr or stdout or 'Unknown error occurred'
-            update_job_status(job_id, 'failed', 0, f'{analysis_mode.title()} analysis failed: {error_message}')
+            job_manager.fail_job(job_id, f'{analysis_mode.title()} analysis failed: {error_message}')
             logger.error(f"{analysis_mode.title()} analysis job {job_id} failed: {error_message}")
             
     except Exception as e:
         error_message = f'{analysis_mode.title()} analysis failed: {str(e)}'
-        update_job_status(job_id, 'failed', 0, error_message)
+        job_manager.fail_job(job_id, error_message)
         logger.error(f"{analysis_mode.title()} analysis job {job_id} failed with exception: {str(e)}")
-
-def update_job_status(job_id, status, progress, message):
-    """Update job status"""
-    if job_id in jobs:
-        jobs[job_id].update({
-            'status': status,
-            'progress': progress,
-            'message': message,
-            'updated_at': datetime.utcnow().isoformat()
-        })
 
 def parse_gitsnip_results(output_dir, repo_url, analysis_mode='fast'):
     """Parse GitSnip analysis results"""

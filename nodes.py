@@ -452,7 +452,7 @@ Synthesize these {len(batch_analyses)} analyses of related code files into:
 2. A brief description of what functionality these files implement (2-3 sentences)
 
 The analyses:
-{chr(10).join([f"BATCH {i+1}:\nNAME: {analysis[0]}\nDESCRIPTION: {analysis[1]}" for i, analysis in enumerate(batch_analyses)])}
+{chr(10).join([f"BATCH {i+1}:" + chr(10) + f"NAME: {analysis[0]}" + chr(10) + f"DESCRIPTION: {analysis[1]}" for i, analysis in enumerate(batch_analyses)])}
 
 Format as:
 NAME: [Your suggested name]

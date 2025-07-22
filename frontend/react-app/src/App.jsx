@@ -149,55 +149,65 @@ function App() {
         throw new Error(errorData.error || 'Failed to start analysis')
       }
 
-      const { job_id } = await startResponse.json()
+      const responseData = await startResponse.json()
+      const { job_id, redirect_url } = responseData
       setJobId(job_id)
+      
+      // Redirect to job page
+      if (redirect_url) {
+        window.location.href = redirect_url
+        return
+      }
+      
+      // Fallback: continue with polling in current page
       setProgress(5)
       setAnalysisMessage('Analysis started, monitoring progress...')
+      pollJobProgress(job_id)
 
-      // Poll for progress
-      const pollProgress = async () => {
-        try {
-          const statusResponse = await fetch(`/api/gitsnip/status/${job_id}`)
-          
-          if (!statusResponse.ok) {
-            throw new Error('Failed to get analysis status')
-          }
+    } catch (error) {
+      console.error('Error starting analysis:', error)
+      setAnalysisMessage(`Error: ${error.message}`)
+      setIsAnalyzing(false)
+    }
+  }
 
-          const statusData = await statusResponse.json()
-          setProgress(statusData.progress)
-          setAnalysisMessage(statusData.message)
+  const pollJobProgress = async (jobId) => {
+    try {
+      const statusResponse = await fetch(`/api/gitsnip/status/${jobId}`)
+      
+      if (!statusResponse.ok) {
+        throw new Error('Failed to get analysis status')
+      }
 
-          if (statusData.status === 'completed') {
-            // Get results
-            const resultsResponse = await fetch(`/api/gitsnip/results/${job_id}`)
-            
-            if (resultsResponse.ok) {
-              const resultsData = await resultsResponse.json()
-              
-              // Check if results are encrypted (private repo)
-              if (resultsData.is_private && resultsData.encrypted_results) {
-                // For private repos, we need to decrypt the results
-                setResults('🔒 **Private Repository Results**\n\nResults are encrypted for security. Click "View Results" to decrypt and display.')
-                setCurrentStep(5)
-              } else {
-                // Public repo - display results normally
-                setResults(formatAnalysisResults(resultsData))
-                setCurrentStep(5)
-              }
-            } else {
-              throw new Error('Failed to get analysis results')
-            }
-            
-            setIsAnalyzing(false)
-          } else if (statusData.status === 'failed') {
-            throw new Error(statusData.message || 'Analysis failed')
-          } else {
-            // Continue polling
-            setTimeout(pollProgress, 2000)
-          }
-        } catch (error) {
-          console.error('Error polling progress:', error)
-          setAnalysisMessage(`Error: ${error.message}`)
+      const statusData = await statusResponse.json()
+      setProgress(statusData.progress)
+      setAnalysisMessage(statusData.message)
+
+      if (statusData.status === 'completed') {
+        // Get results
+        const resultsResponse = await fetch(`/api/gitsnip/results/${jobId}`)
+        
+        if (resultsResponse.ok) {
+          const resultsData = await resultsResponse.json()
+          setResults(formatAnalysisResults(resultsData))
+          setCurrentStep(5)
+        } else {
+          throw new Error('Failed to get analysis results')
+        }
+        
+        setIsAnalyzing(false)
+      } else if (statusData.status === 'failed') {
+        throw new Error(statusData.message || 'Analysis failed')
+      } else {
+        // Continue polling
+        setTimeout(() => pollJobProgress(jobId), 2000)
+      }
+    } catch (error) {
+      console.error('Error polling progress:', error)
+      setAnalysisMessage(`Error: ${error.message}`)
+      setIsAnalyzing(false)
+    }
+  }
           setIsAnalyzing(false)
         }
       }
