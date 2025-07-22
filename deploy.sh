@@ -155,11 +155,13 @@ build_images() {
 deploy_frontend() {
     print_status "Deploying GitSnip Frontend..."
     
-    # Build and start frontend
-    $DOCKER_COMPOSE_CMD --profile frontend up -d --build
+    # Build and start frontend only
+    $DOCKER_COMPOSE_CMD up -d --build frontend
     
     print_success "Frontend deployed successfully!"
     print_status "Frontend is available at: http://localhost:8000"
+    print_warning "Note: Backend is not running. Frontend will show connection errors for API calls."
+    print_status "To deploy with backend, use option 2 (Full Stack)"
 }
 
 # Deploy full stack
@@ -167,7 +169,7 @@ deploy_fullstack() {
     print_status "Deploying GitSnip Full Stack..."
     
     # Build and start all services
-    $DOCKER_COMPOSE_CMD --profile fullstack up -d --build
+    $DOCKER_COMPOSE_CMD up -d --build backend frontend
     
     print_success "Full stack deployed successfully!"
     print_status "Frontend: http://localhost:8000"
@@ -394,9 +396,9 @@ test_application() {
 show_menu() {
     echo ""
     echo "Select deployment option:"
-    echo "1) Deploy Frontend Only (Docker)"
-    echo "2) Deploy Full Stack (Docker)"
-    echo "3) Development Mode (No Docker) - Recommended if Docker issues"
+    echo "1) Deploy Frontend Only (Docker) - UI only, no backend"
+    echo "2) Deploy Full Stack (Docker) - Complete application"
+    echo "3) Development Mode (No Docker) - Recommended for development"
     echo "4) Stop All Services"
     echo "5) Show Logs"
     echo "6) Show Status"
