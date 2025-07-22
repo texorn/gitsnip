@@ -44,11 +44,32 @@ check_docker() {
         exit 1
     fi
     
+    # Check if user is in docker group
+    if ! groups $USER | grep -q docker; then
+        print_warning "User $USER is not in docker group. Adding to docker group..."
+        sudo usermod -aG docker $USER
+        print_warning "Please log out and log back in for group changes to take effect."
+        print_status "Alternatively, you can run: newgrp docker"
+    fi
+    
     # Check if Docker daemon is running
-    if ! sudo docker info &> /dev/null; then
+    if ! docker info &> /dev/null; then
         print_status "Starting Docker daemon..."
         sudo systemctl start docker || sudo service docker start
         sleep 3
+        
+        # Try without sudo if user is in docker group
+        if ! docker info &> /dev/null; then
+            print_warning "Docker requires sudo. This is normal if you just added user to docker group."
+            DOCKER_CMD="sudo docker"
+            DOCKER_COMPOSE_CMD="sudo docker-compose"
+        else
+            DOCKER_CMD="docker"
+            DOCKER_COMPOSE_CMD="docker-compose"
+        fi
+    else
+        DOCKER_CMD="docker"
+        DOCKER_COMPOSE_CMD="docker-compose"
     fi
     
     # Check for docker-compose
@@ -113,7 +134,7 @@ deploy_frontend() {
     print_status "Deploying GitSnip Frontend..."
     
     # Build and start frontend
-    sudo docker-compose --profile frontend up -d --build
+    $DOCKER_COMPOSE_CMD --profile frontend up -d --build
     
     print_success "Frontend deployed successfully!"
     print_status "Frontend is available at: http://localhost:8000"
@@ -124,7 +145,7 @@ deploy_fullstack() {
     print_status "Deploying GitSnip Full Stack..."
     
     # Build and start all services
-    sudo docker-compose --profile fullstack up -d --build
+    $DOCKER_COMPOSE_CMD --profile fullstack up -d --build
     
     print_success "Full stack deployed successfully!"
     print_status "Frontend: http://localhost:8000"
@@ -218,9 +239,9 @@ stop_services() {
     print_status "Stopping GitSnip services..."
     
     # Stop Docker containers
-    sudo docker-compose down 2>/dev/null || true
-    sudo docker stop gitsnip-frontend gitsnip-backend 2>/dev/null || true
-    sudo docker rm gitsnip-frontend gitsnip-backend 2>/dev/null || true
+    $DOCKER_COMPOSE_CMD down 2>/dev/null || true
+    $DOCKER_CMD stop gitsnip-frontend gitsnip-backend 2>/dev/null || true
+    $DOCKER_CMD rm gitsnip-frontend gitsnip-backend 2>/dev/null || true
     
     # Stop development servers
     pkill -f "api_server.py" 2>/dev/null || true
@@ -232,14 +253,14 @@ stop_services() {
 # Show logs
 show_logs() {
     print_status "Showing GitSnip logs..."
-    if sudo docker-compose ps | grep -q "gitsnip"; then
-        sudo docker-compose logs -f --tail 50
+    if $DOCKER_COMPOSE_CMD ps | grep -q "gitsnip"; then
+        $DOCKER_COMPOSE_CMD logs -f --tail 50
     else
         echo "Frontend logs:"
-        sudo docker logs gitsnip-frontend --tail 50 2>/dev/null || echo "Frontend container not running"
+        $DOCKER_CMD logs gitsnip-frontend --tail 50 2>/dev/null || echo "Frontend container not running"
         echo ""
         echo "Backend logs:"
-        sudo docker logs gitsnip-backend --tail 50 2>/dev/null || echo "Backend container not running"
+        $DOCKER_CMD logs gitsnip-backend --tail 50 2>/dev/null || echo "Backend container not running"
     fi
 }
 
@@ -248,13 +269,13 @@ show_status() {
     print_status "GitSnip Service Status:"
     
     # Check Docker containers
-    if sudo docker ps | grep -q gitsnip-frontend; then
+    if $DOCKER_CMD ps | grep -q gitsnip-frontend; then
         print_success "Frontend Container: Running"
     else
         print_warning "Frontend Container: Not running"
     fi
     
-    if sudo docker ps | grep -q gitsnip-backend; then
+    if $DOCKER_CMD ps | grep -q gitsnip-backend; then
         print_success "Backend Container: Running"
     else
         print_warning "Backend Container: Not running"

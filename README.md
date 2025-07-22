@@ -79,37 +79,71 @@ The script will guide you through deployment options:
 2. **Full Stack** - Complete application with real analysis
 3. **Production** - Production-ready setup with reverse proxy
 
-### Option 2: Docker Commands
+## 🚀 Quick Start
+
+### Option 1: One-Command Deployment (Recommended)
 
 ```bash
-# Frontend only (fastest setup)
-docker-compose up -d frontend
-# Access at: http://localhost
+# Clone the repository
+git clone https://github.com/texorn/gitsnip.git
+cd gitsnip
 
-# Full stack (frontend + backend)
-docker-compose --profile backend up -d
-# Frontend: http://localhost
-# Backend API: http://localhost:5000
-
-# Production setup (with reverse proxy)
-docker-compose --profile backend --profile proxy up -d
-# Access at: http://localhost:8080
+# Run the interactive deployment script
+./deploy.sh
 ```
 
-### Option 3: Manual Docker Build
+The deployment script will:
+- ✅ Install Docker and Docker Compose if needed
+- ✅ Set up user permissions for Docker
+- ✅ Create environment configuration
+- ✅ Offer multiple deployment options:
+  1. **Frontend Only** (Docker) - Just the web interface
+  2. **Full Stack** (Docker) - Complete application with backend
+  3. **Development Mode** - No Docker, for development
+
+**Access your application:**
+- **Frontend**: http://localhost:8000 (Docker) or http://localhost:5173 (Dev)
+- **Backend API**: http://localhost:4000
+- **Health Check**: http://localhost:4000/health
+
+### Option 2: Manual Docker Deployment
 
 ```bash
-# Build and run frontend
-cd frontend/react-app
-docker build -t gitsnip-frontend .
-docker run -p 80:80 gitsnip-frontend
+# Clone and navigate
+git clone https://github.com/texorn/gitsnip.git
+cd gitsnip
 
-# Build and run backend
-cd ../..
-docker build -f Dockerfile.backend -t gitsnip-backend .
-docker run -p 5000:5000 gitsnip-backend
+# Create environment file
+cp .env.example .env
+# Edit .env with your API keys
+
+# Deploy full stack
+docker-compose --profile fullstack up -d --build
+
+# Or deploy frontend only
+docker-compose --profile frontend up -d --build
 ```
 
+## 🎯 Analysis Modes
+
+GitSnip offers two analysis modes to suit different needs:
+
+### 🚀 Fast Analysis Mode
+- **Speed**: Lightning fast analysis using Gemini 2.5 Flash-Lite Preview
+- **Limit**: Analyzes up to 5 files maximum
+- **API Key**: Uses built-in API key (no setup required)
+- **Best for**: Quick overviews, small projects, rapid prototyping
+
+### 🔬 Detailed Analysis Mode
+- **Depth**: Comprehensive analysis of entire codebase
+- **Limit**: No file limit restrictions
+- **API Key**: Requires your own Gemini API key
+- **Best for**: Large projects, thorough documentation, production use
+
+**Getting a Gemini API Key:**
+1. Visit [Google AI Studio](https://aistudio.google.com/app/apikey)
+2. Create a new API key
+3. Enter it in the "Detailed Analysis" mode in GitSnip
 ## 🛠️ Development Setup
 
 ### Prerequisites
@@ -119,7 +153,28 @@ docker run -p 5000:5000 gitsnip-backend
 - **Python 3.11+** (for backend development)
 - **Git** (for cloning)
 
-### Frontend Development
+### Quick Development Start
+
+```bash
+# Clone the repository
+git clone https://github.com/texorn/gitsnip.git
+cd gitsnip
+
+# Use the deployment script for development mode
+./deploy.sh
+# Select option 3: "Development Mode (No Docker)"
+```
+
+This will automatically:
+- Set up Python virtual environment
+- Install all dependencies
+- Start backend on port 4000
+- Start frontend on port 5173 (or next available)
+- Handle all configuration
+
+### Manual Development Setup
+
+#### Frontend Development
 
 ```bash
 # Navigate to frontend
@@ -133,7 +188,7 @@ pnpm run dev --host
 # Access at: http://localhost:5173
 ```
 
-### Backend Development
+#### Backend Development
 
 ```bash
 # Create virtual environment
@@ -150,7 +205,7 @@ export GITHUB_TOKEN="your_github_token_here"  # Optional
 
 # Run the API server
 python api_server.py
-# API available at: http://localhost:5000
+# API available at: http://localhost:4000
 ```
 
 ### Command Line Usage
