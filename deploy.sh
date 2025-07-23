@@ -160,7 +160,7 @@ deploy_frontend() {
     
     print_success "Frontend deployed successfully!"
     print_status "Frontend is available at: http://localhost:8000"
-    print_warning "Note: Backend is not running. Frontend will show connection errors for API calls."
+    print_warning "Note: Backend and Redis are not running. Frontend will show connection errors for API calls."
     print_status "To deploy with backend, use option 2 (Full Stack)"
 }
 
@@ -168,12 +168,20 @@ deploy_frontend() {
 deploy_fullstack() {
     print_status "Deploying GitSnip Full Stack..."
     
-    # Build and start all services
-    $DOCKER_COMPOSE_CMD up -d --build backend frontend-fullstack
+    # Build and start all services including Redis
+    $DOCKER_COMPOSE_CMD up -d --build redis backend frontend-fullstack
     
     print_success "Full stack deployed successfully!"
     print_status "Frontend: http://localhost:8000"
     print_status "Backend API: http://localhost:4000"
+    print_status "Redis: localhost:6379"
+    
+    # Wait for services to be healthy
+    print_status "Waiting for services to be ready..."
+    sleep 10
+    
+    # Check service health
+    check_service_health
 }
 
 # Deploy with development mode (no Docker)
@@ -186,6 +194,22 @@ deploy_dev() {
         print_status "Loaded environment variables from .env"
     fi
     
+    # Set API key for testing (remove this in production)
+    export GEMINI_API_KEY="AIzaSyBMRU4XUfWGs4TtxAXQOa7KhYOOBJGGKOo"
+    
+    # Check if Redis is available locally
+    if command -v redis-server &> /dev/null; then
+        if ! pgrep redis-server > /dev/null; then
+            print_status "Starting local Redis server..."
+            redis-server --daemonize yes --port 6379 --maxmemory 256mb --maxmemory-policy allkeys-lru
+            sleep 2
+        fi
+        print_success "Redis is running locally on port 6379"
+    else
+        print_warning "Redis not found locally. Job tracking will use in-memory fallback."
+        print_status "To install Redis: sudo apt-get install redis-server (Ubuntu/Debian)"
+    fi
+    
     # Check if Python dependencies are installed
     if [ ! -d "venv" ]; then
         print_status "Creating Python virtual environment..."
@@ -193,7 +217,7 @@ deploy_dev() {
         source venv/bin/activate
         print_status "Installing Python dependencies..."
         pip install -r requirements.txt
-        pip install flask flask-cors cryptography
+        pip install flask flask-cors cryptography redis
     else
         source venv/bin/activate
         print_status "Using existing virtual environment"
@@ -263,15 +287,47 @@ stop_services() {
     print_status "Stopping GitSnip services..."
     
     # Stop Docker containers
-    $DOCKER_COMPOSE_CMD down 2>/dev/null || true
-    $DOCKER_CMD stop gitsnip-frontend gitsnip-backend 2>/dev/null || true
-    $DOCKER_CMD rm gitsnip-frontend gitsnip-backend 2>/dev/null || true
+    $DOCKER_COMPOSE_CMD down --remove-orphans 2>/dev/null || true
+    $DOCKER_CMD stop gitsnip-frontend gitsnip-frontend-fullstack gitsnip-backend gitsnip-redis gitsnip-proxy 2>/dev/null || true
+    $DOCKER_CMD rm gitsnip-frontend gitsnip-frontend-fullstack gitsnip-backend gitsnip-redis gitsnip-proxy 2>/dev/null || true
     
     # Stop development servers
     pkill -f "api_server.py" 2>/dev/null || true
     pkill -f "vite" 2>/dev/null || true
     
+    # Stop local Redis if started by this script
+    if pgrep redis-server > /dev/null; then
+        print_status "Stopping local Redis server..."
+        pkill redis-server 2>/dev/null || true
+    fi
+    
     print_success "All services stopped"
+}
+
+# Check service health
+check_service_health() {
+    print_status "Checking service health..."
+    
+    # Check Redis
+    if curl -s --connect-timeout 5 http://localhost:6379 > /dev/null 2>&1 || redis-cli ping > /dev/null 2>&1; then
+        print_success "Redis: Healthy"
+    else
+        print_warning "Redis: Not responding"
+    fi
+    
+    # Check backend
+    if curl -s --connect-timeout 10 http://localhost:4000/health > /dev/null 2>&1; then
+        print_success "Backend: Healthy"
+    else
+        print_warning "Backend: Not responding (may still be starting)"
+    fi
+    
+    # Check frontend
+    if curl -s --connect-timeout 10 http://localhost:8000/ > /dev/null 2>&1; then
+        print_success "Frontend: Healthy"
+    else
+        print_warning "Frontend: Not responding (may still be starting)"
+    fi
 }
 
 # Show logs
@@ -280,11 +336,14 @@ show_logs() {
     if $DOCKER_COMPOSE_CMD ps | grep -q "gitsnip"; then
         $DOCKER_COMPOSE_CMD logs -f --tail 50
     else
-        echo "Frontend logs:"
-        $DOCKER_CMD logs gitsnip-frontend --tail 50 2>/dev/null || echo "Frontend container not running"
+        echo "Redis logs:"
+        $DOCKER_CMD logs gitsnip-redis --tail 20 2>/dev/null || echo "Redis container not running"
         echo ""
         echo "Backend logs:"
-        $DOCKER_CMD logs gitsnip-backend --tail 50 2>/dev/null || echo "Backend container not running"
+        $DOCKER_CMD logs gitsnip-backend --tail 30 2>/dev/null || echo "Backend container not running"
+        echo ""
+        echo "Frontend logs:"
+        $DOCKER_CMD logs gitsnip-frontend --tail 20 2>/dev/null || echo "Frontend container not running"
     fi
 }
 
@@ -293,10 +352,10 @@ show_status() {
     print_status "GitSnip Service Status:"
     
     # Check Docker containers
-    if $DOCKER_CMD ps | grep -q gitsnip-frontend; then
-        print_success "Frontend Container: Running"
+    if $DOCKER_CMD ps | grep -q gitsnip-redis; then
+        print_success "Redis Container: Running"
     else
-        print_warning "Frontend Container: Not running"
+        print_warning "Redis Container: Not running"
     fi
     
     if $DOCKER_CMD ps | grep -q gitsnip-backend; then
@@ -305,8 +364,30 @@ show_status() {
         print_warning "Backend Container: Not running"
     fi
     
+    if $DOCKER_CMD ps | grep -q gitsnip-frontend; then
+        print_success "Frontend Container: Running"
+    else
+        print_warning "Frontend Container: Not running"
+    fi
+    
     echo ""
     print_status "Health Checks:"
+    
+    # Check Redis
+    if redis-cli ping > /dev/null 2>&1; then
+        print_success "Redis: Healthy (localhost:6379)"
+    elif $DOCKER_CMD exec gitsnip-redis redis-cli ping > /dev/null 2>&1; then
+        print_success "Redis: Healthy (Docker container)"
+    else
+        print_warning "Redis: Not responding"
+    fi
+    
+    # Check backend
+    if curl -s http://localhost:4000/health > /dev/null 2>&1; then
+        print_success "Backend: Healthy (http://localhost:4000)"
+    else
+        print_warning "Backend: Not running or unhealthy"
+    fi
     
     # Check frontend
     if curl -s http://localhost:8000/ > /dev/null 2>&1; then
@@ -316,18 +397,20 @@ show_status() {
     else
         print_error "Frontend: Unhealthy or not running"
     fi
-    
-    # Check backend
-    if curl -s http://localhost:4000/health > /dev/null 2>&1; then
-        print_success "Backend: Healthy (http://localhost:4000)"
-    else
-        print_warning "Backend: Not running or unhealthy"
-    fi
 }
 
 # Test the application
 test_application() {
     print_status "Testing GitSnip Application..."
+    
+    # Test Redis connection
+    if redis-cli ping > /dev/null 2>&1; then
+        print_success "Redis connection test passed (local)"
+    elif $DOCKER_CMD exec gitsnip-redis redis-cli ping > /dev/null 2>&1; then
+        print_success "Redis connection test passed (Docker)"
+    else
+        print_warning "Redis connection test failed - using in-memory fallback"
+    fi
     
     # Test backend health
     if curl -s http://localhost:4000/health > /dev/null 2>&1; then
@@ -345,6 +428,15 @@ test_application() {
         return 1
     fi
     
+    # Test job tracking endpoints
+    print_status "Testing job tracking endpoints..."
+    JOBS_TEST=$(curl -s http://localhost:4000/api/jobs)
+    if echo "$JOBS_TEST" | grep -q "jobs"; then
+        print_success "Job listing endpoint test passed"
+    else
+        print_warning "Job listing endpoint test failed"
+    fi
+    
     # Test fast analysis mode (mock request)
     print_status "Testing fast analysis mode..."
     FAST_TEST=$(curl -s -X POST http://localhost:4000/api/gitsnip/analyze \
@@ -359,7 +451,17 @@ test_application() {
         }')
     
     if echo "$FAST_TEST" | grep -q "job_id"; then
-        print_success "Fast analysis mode API test passed"
+        JOB_ID=$(echo "$FAST_TEST" | grep -o '"job_id":"[^"]*"' | cut -d'"' -f4)
+        print_success "Fast analysis mode API test passed (Job ID: $JOB_ID)"
+        
+        # Test job status endpoint
+        sleep 2
+        JOB_STATUS=$(curl -s http://localhost:4000/api/gitsnip/status/$JOB_ID)
+        if echo "$JOB_STATUS" | grep -q "status"; then
+            print_success "Job status tracking test passed"
+        else
+            print_warning "Job status tracking test failed"
+        fi
     else
         print_warning "Fast analysis mode API test failed (may need valid repo)"
     fi

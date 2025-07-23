@@ -208,12 +208,6 @@ function App() {
       setIsAnalyzing(false)
     }
   }
-          setIsAnalyzing(false)
-        }
-      }
-
-      // Start polling
-      setTimeout(pollProgress, 1000)
 
     } catch (error) {
       console.error('Analysis error:', error)

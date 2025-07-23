@@ -248,41 +248,6 @@ def list_jobs():
         'total': len(jobs)
     })
 
-@app.route('/api/gitsnip/results/<job_id>', methods=['GET'])
-def get_results(job_id):
-    """Get analysis results"""
-    if job_id not in jobs:
-        return jsonify({'error': 'Job not found'}), 404
-    
-    job = jobs[job_id]
-    if job['status'] != 'completed':
-        return jsonify({'error': 'Analysis not completed yet'}), 400
-    
-    # Check if this is a private repository
-    is_private = job.get('config', {}).get('is_private', False)
-    
-    if is_private:
-        # For private repos, return encrypted results
-        return jsonify({
-            'job_id': job_id,
-            'status': job['status'],
-            'repository_url': job['repository_url'],
-            'is_private': True,
-            'encrypted_results': job.get('encrypted_results'),
-            'completed_at': job.get('completed_at'),
-            'download_url': f'/api/gitsnip/download/{job_id}'
-        })
-    else:
-        # For public repos, return results normally
-        return jsonify({
-            'job_id': job_id,
-            'status': job['status'],
-            'repository_url': job['repository_url'],
-            'is_private': False,
-            'results': job['results'],
-            'completed_at': job.get('completed_at'),
-            'download_url': f'/api/gitsnip/download/{job_id}'
-        })
 
 @app.route('/api/gitsnip/decrypt/<job_id>', methods=['POST'])
 def decrypt_results(job_id):
@@ -415,20 +380,7 @@ def download_results(job_id):
             logger.error(f"Error creating download: {str(e)}")
             return jsonify({'error': 'Failed to create download'}), 500
 
-@app.route('/api/gitsnip/jobs', methods=['GET'])
-def list_jobs():
-    """List all analysis jobs"""
-    job_list = []
-    for job_id, job in jobs.items():
-        job_list.append({
-            'job_id': job_id,
-            'status': job['status'],
-            'repository_url': job['repository_url'],
-            'created_at': job['created_at'],
-            'progress': job['progress']
-        })
-    
-    return jsonify({'jobs': job_list})
+
 
 def run_gitsnip_analysis(job_id, repo_url, config, analysis_mode='fast', user_api_key=None):
     """Run the actual GitSnip analysis"""
