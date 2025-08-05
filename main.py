@@ -24,6 +24,9 @@ def main():
     parser.add_argument("-e", "--exclude", nargs="+", help="Files to exclude (e.g., 'tests/*' 'docs/*')")
     parser.add_argument("-s", "--max-size", type=int, default=100000, help="Maximum file size in bytes (default: 100KB)")
     parser.add_argument("--language", default="english", help="Language for the generated tutorial")
+    parser.add_argument("--analysis-mode", choices=["fast", "detailed"], default="fast", 
+                       help="Analysis mode: 'fast' (5 files max, built-in API) or 'detailed' (requires user API key)")
+    parser.add_argument("--user-api-key", help="User's Gemini API key (required for detailed analysis)")
 
     args = parser.parse_args()
 
@@ -37,8 +40,16 @@ def main():
         "include_patterns": set(args.include) if args.include else None,
         "exclude_patterns": set(args.exclude) if args.exclude else None,
         "max_file_size": args.max_size,
-        "language": args.language
+        "language": args.language,
+        "analysis_mode": args.analysis_mode,
+        "user_api_key": args.user_api_key
     }
+    
+    # Validate analysis mode requirements
+    if args.analysis_mode == "detailed" and not args.user_api_key:
+        print("Error: --user-api-key is required for detailed analysis mode")
+        print("Please provide your Gemini API key for comprehensive analysis")
+        sys.exit(1)
     
     # Import here to avoid circular imports
     from flow import create_tutorial_flow

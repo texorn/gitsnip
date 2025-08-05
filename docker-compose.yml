@@ -1,0 +1,140 @@
+services:
+  # Redis for job tracking and caching
+  redis:
+    image: redis:7-alpine
+    container_name: gitsnip-redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - gitsnip-network
+    profiles:
+      - backend
+      - fullstack
+      - redis
+
+  # GitSnip React Frontend (Frontend-only)
+  frontend:
+    build:
+      context: ./frontend/react-app
+      dockerfile: Dockerfile
+    container_name: gitsnip-frontend
+    ports:
+      - "${FRONTEND_PORT:-8000}:80"
+    environment:
+      - NODE_ENV=production
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - gitsnip-network
+    profiles:
+      - frontend
+
+  # GitSnip React Frontend (Full-stack with backend proxy)
+  frontend-fullstack:
+    build:
+      context: ./frontend/react-app
+      dockerfile: Dockerfile
+    container_name: gitsnip-frontend-fullstack
+    ports:
+      - "${FRONTEND_PORT:-8000}:80"
+    environment:
+      - NODE_ENV=production
+    volumes:
+      - ./frontend/react-app/nginx-fullstack.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - gitsnip-network
+    profiles:
+      - fullstack
+
+  # GitSnip Python Backend
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: gitsnip-backend
+    ports:
+      - "${BACKEND_PORT:-4000}:4000"
+    environment:
+      - FLASK_ENV=${FLASK_ENV:-production}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - PORT=4000
+    volumes:
+      - ./data:/app/data
+      - ./output:/app/output
+      - ./temp:/app/temp
+      - ./logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - gitsnip-network
+    profiles:
+      - backend
+      - fullstack
+
+  # Reverse Proxy (for production deployment)
+  nginx-proxy:
+    image: nginx:alpine
+    container_name: gitsnip-proxy
+    ports:
+      - "${PROXY_PORT:-8080}:80"
+    volumes:
+      - ./nginx-proxy.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      frontend-fullstack:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - gitsnip-network
+    profiles:
+      - proxy
+
+networks:
+  gitsnip-network:
+    driver: bridge
+
+volumes:
+  gitsnip-data:
+    driver: local
+  redis-data:
+    driver: local

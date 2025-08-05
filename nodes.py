@@ -102,15 +102,27 @@ class IdentifyAbstractions(Node):
         project_name = shared["project_name"]
         language = shared.get("language", "english")
         output_dir = shared.get("output_dir", "./output")
+        analysis_mode = shared.get("analysis_mode", "fast")
+        user_api_key = shared.get("user_api_key")
 
         print(f"Preparing to identify abstractions from {len(files_data)} files...")
+        print(f"Analysis mode: {analysis_mode}")
+        
+        # Import analysis limits
+        from utils.call_llm import get_analysis_limits
+        limits = get_analysis_limits(analysis_mode)
+        
+        # Apply file limits based on analysis mode
+        if analysis_mode == "fast":
+            print(f"Fast mode: limiting to {limits['max_files']} files")
+            files_data = files_data[:limits['max_files']]
         
         # Calculate initial content size for informational purposes only
         initial_content_size = sum(len(content) for _, content in files_data)
         print(f"Initial codebase size: {initial_content_size/1000000:.2f}MB ({initial_content_size} chars)")
         
         # Filter out non-code and extremely large files in any case
-        INDIVIDUAL_FILE_SIZE_LIMIT = 1000000  # Skip individual files larger than 1MB
+        max_file_size = limits['max_file_size']
         filtered_files = []
         skipped_count = {"virtual_env": 0, "node_modules": 0, "size": 0, "other": 0}
         
@@ -122,8 +134,8 @@ class IdentifyAbstractions(Node):
             elif "node_modules/" in path:
                 skipped_count["node_modules"] += 1
                 continue
-            # Skip very large files
-            elif len(content) > INDIVIDUAL_FILE_SIZE_LIMIT:
+            # Skip very large files based on analysis mode
+            elif len(content) > max_file_size:
                 skipped_count["size"] += 1
                 continue
                 
@@ -140,15 +152,19 @@ class IdentifyAbstractions(Node):
         print(f"  - Large files skipped: {skipped_count['size']}")
         print(f"Filtered codebase size: {filtered_content_size/1000000:.2f}MB ({filtered_content_size} chars)")
         
+        # Store analysis parameters
+        shared["analysis_mode"] = analysis_mode
+        shared["user_api_key"] = user_api_key
+        
         # Choose approach based on FILTERED content size
         if filtered_content_size <= MAX_CONTEXT_SIZE and len(filtered_files) <= 100:
             print(f"Filtered codebase is small enough to process directly with LLM context window")
-            return self._direct_llm_approach(filtered_files, project_name, language)
+            return self._direct_llm_approach(filtered_files, project_name, language, analysis_mode, user_api_key)
         else:
             print(f"Filtered codebase exceeds context limit, using embedding-based clustering approach")
-            return self._embedding_approach(filtered_files, files_data, project_name, language)
+            return self._embedding_approach(filtered_files, files_data, project_name, language, analysis_mode, user_api_key)
 
-    def _direct_llm_approach(self, filtered_files, project_name, language):
+    def _direct_llm_approach(self, filtered_files, project_name, language, analysis_mode, user_api_key):
         """Process smaller codebases by sending content directly to the LLM"""
         # Create context from all filtered files
         context = ""
@@ -224,7 +240,7 @@ Your response MUST be in the following YAML format and nothing else:
 ```"""
 
         print("Identifying abstractions using direct LLM approach...")
-        response = call_llm(prompt)
+        response = call_llm(prompt, analysis_mode=analysis_mode, user_api_key=user_api_key)
 
         # Parse YAML response
         try:
@@ -298,7 +314,7 @@ Your response MUST be in the following YAML format and nothing else:
         print(f"Identified {len(validated_abstractions)} abstractions using direct LLM approach")
         return validated_abstractions
 
-    def _embedding_approach(self, filtered_files, original_files, project_name, language):
+    def _embedding_approach(self, filtered_files, original_files, project_name, language, analysis_mode, user_api_key):
         """Process larger codebases using embeddings and clustering with improved chunking"""
         from utils.get_embedding import get_embedding, cluster_embeddings
         
@@ -436,7 +452,7 @@ Synthesize these {len(batch_analyses)} analyses of related code files into:
 2. A brief description of what functionality these files implement (2-3 sentences)
 
 The analyses:
-{chr(10).join([f"BATCH {i+1}:\nNAME: {analysis[0]}\nDESCRIPTION: {analysis[1]}" for i, analysis in enumerate(batch_analyses)])}
+{chr(10).join([f"BATCH {i+1}:" + chr(10) + f"NAME: {analysis[0]}" + chr(10) + f"DESCRIPTION: {analysis[1]}" for i, analysis in enumerate(batch_analyses)])}
 
 Format as:
 NAME: [Your suggested name]
@@ -547,7 +563,7 @@ IMPORTANT SECTIONS:
 ... and so on. Do not include any other commentary.
 """
                 # Call LLM to identify important sections
-                important_sections = call_llm(selection_prompt)
+                important_sections = call_llm(selection_prompt, analysis_mode=analysis_mode, user_api_key=user_api_key)
                 
                 # Extract the identified important sections
                 if "IMPORTANT SECTIONS:" in important_sections:
@@ -577,7 +593,7 @@ NAME: [Your suggested name]
 DESCRIPTION: [Your description]
 """
         
-        response = call_llm(prompt)
+        response = call_llm(prompt, analysis_mode=analysis_mode, user_api_key=user_api_key)
         
         # Parse name and description
         name = f"Cluster {cluster_id} Files"
@@ -613,7 +629,7 @@ Return ONLY a comma-separated list of abstraction indices in descending order of
 For example: 2,0,3,1,4
 """
         
-        response = call_llm(prompt)
+        response = call_llm(prompt, analysis_mode=analysis_mode, user_api_key=user_api_key)
         try:
             # Parse comma-separated indices
             importance_order = [int(idx.strip()) for idx in response.split(',')]
@@ -720,6 +736,8 @@ class AnalyzeRelationships(Node):
         files_data = shared["files"]
         project_name = shared["project_name"]  # Get project name
         language = shared.get("language", "english") # Get language
+        analysis_mode = shared.get("analysis_mode", "fast")
+        user_api_key = shared.get("user_api_key")
 
         # Create context with abstraction names, indices, descriptions, and relevant file snippets
         context = "Identified Abstractions:\n"
@@ -788,10 +806,10 @@ class AnalyzeRelationships(Node):
             
         context += file_context_str
 
-        return context, "\n".join(abstraction_info_for_prompt), project_name, language # Return language
+        return context, "\n".join(abstraction_info_for_prompt), project_name, language, analysis_mode, user_api_key # Return analysis parameters
 
     def exec(self, prep_res):
-        context, abstraction_listing, project_name, language = prep_res  # Unpack project name and language
+        context, abstraction_listing, project_name, language, analysis_mode, user_api_key = prep_res  # Unpack analysis parameters
         print(f"Analyzing relationships using LLM...")
 
         # Add language instruction and hints only if not English
@@ -841,7 +859,7 @@ relationships:
 
 Now, provide the YAML output:
 """
-        response = call_llm(prompt)
+        response = call_llm(prompt, analysis_mode=analysis_mode, user_api_key=user_api_key)
 
         # --- Validation ---
         try:
